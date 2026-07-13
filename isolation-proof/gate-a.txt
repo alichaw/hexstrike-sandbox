@@ -1,6 +1,6 @@
 # Isolation proof — network 'labnet'
 # generated: 2026-07-13T06:16:42Z
-# host: AN990175215
+# host: REDACTED-HOST
 
 ## A0  network is internal (expect Internal=true)
 Internal=true  Subnet=172.18.0.0/16
