@@ -1,0 +1,3 @@
+{"run":1,"ts":"2026-07-13T05:49:22Z","http_code":"200","return_code":0,"host_up":1,"elapsed_s":11.94,"verdict":"ok"}
+{"run":2,"ts":"2026-07-13T05:49:34Z","http_code":"200","return_code":0,"host_up":1,"elapsed_s":11.99,"verdict":"ok"}
+{"run":3,"ts":"2026-07-13T05:49:46Z","http_code":"200","return_code":0,"host_up":1,"elapsed_s":11.98,"verdict":"ok"}
