@@ -7,8 +7,9 @@ import shutil
 import sys
 from pathlib import Path
 
-PATCH_MARKER = "# Cancellable jobs v3"
+PATCH_MARKER = "# Cancellable jobs v4"
 BLOCK_STARTS = (
+    "# Cancellable jobs v3",
     "# Cancellable jobs v2",
     "# Cancellable jobs are restricted by a root-owned /32 target matrix.",
 )
@@ -244,6 +245,50 @@ def create_httpx_job():
             return jsonify({"error": f"{name} must be boolean"}), 400
         if value:
             command.append(flag)
+    return _hex_start_job(command)
+
+
+@app.route("/api/jobs/gobuster", methods=["POST"])
+def create_gobuster_job():
+    """Start a low-rate directory enumeration with fixed-safe arguments."""
+    if not _hex_create_authorized():
+        return jsonify({"error": "job creation unauthorized"}), 401
+    if not _hex_tool_allowed("gobuster"):
+        return jsonify({"error": "tool not enabled"}), 403
+
+    params = request.get_json(silent=True) or {}
+    allowed = {"url", "mode", "wordlist", "exclude_length"}
+    if not isinstance(params, dict):
+        return jsonify({"error": "JSON object required"}), 400
+    unknown = sorted(set(params) - allowed)
+    if unknown:
+        return jsonify({"error": f"Unsupported parameters: {', '.join(unknown)}"}), 400
+
+    target, error = _hex_validate_url(str(params.get("url", "")).strip())
+    if target is None:
+        return jsonify({"error": error}), 403
+    if params.get("mode", "dir") != "dir":
+        return jsonify({"error": "Only dir mode is supported"}), 400
+
+    wordlist = str(params.get("wordlist", ""))
+    if wordlist != "/usr/share/wordlists/dirb/common.txt":
+        return jsonify({"error": "Unsupported wordlist"}), 400
+
+    exclude_length = params.get("exclude_length")
+    if exclude_length is not None:
+        try:
+            exclude_length = int(exclude_length)
+        except (TypeError, ValueError):
+            return jsonify({"error": "exclude_length must be an integer"}), 400
+        if not 1 <= exclude_length <= 10000000:
+            return jsonify({"error": "exclude_length out of range"}), 400
+
+    command = [
+        "gobuster", "dir", "-u", target, "-w", wordlist,
+        "-t", "5", "--delay", "100ms", "--no-error",
+    ]
+    if exclude_length is not None:
+        command.extend(["--exclude-length", str(exclude_length)])
     return _hex_start_job(command)
 
 
