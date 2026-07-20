@@ -7,8 +7,9 @@ import shutil
 import sys
 from pathlib import Path
 
-PATCH_MARKER = "# Cancellable jobs v8"
+PATCH_MARKER = "# Cancellable jobs v9"
 BLOCK_STARTS = (
+    "# Cancellable jobs v8",
     "# Cancellable jobs v7",
     "# Cancellable jobs v6",
     "# Cancellable jobs v5",
@@ -20,7 +21,7 @@ BLOCK_STARTS = (
 INSERT_BEFORE = '@app.route("/api/tools/httpx", methods=["POST"])'
 
 ENDPOINT = r'''
-# Cancellable jobs v8
+# Cancellable jobs v9
 # Jobs are restricted by a root-owned IPv4 /32 target matrix.
 import hashlib as _hex_hashlib
 import ipaddress as _hex_ipaddress
@@ -37,7 +38,7 @@ from pathlib import Path as _HexPath
 from urllib.parse import urlsplit as _hex_urlsplit
 
 _HEX_JOB_TARGETS = _HexPath("/etc/hexstrike/job-targets.json")
-_HEX_NUCLEI_TEMPLATES = "/var/lib/hexstrike/nuclei-templates"
+_HEX_NUCLEI_TEMPLATES = "/var/lib/hexstrike/.local/nuclei-templates"
 _hex_jobs = {}
 _hex_jobs_lock = _hex_threading.Lock()
 
