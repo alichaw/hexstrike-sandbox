@@ -8,8 +8,7 @@ import sys
 from pathlib import Path
 
 PATCH_MARKER = "# Cancellable jobs v2"
-BLOCK_START = "# Cancellable jobs v2
-# Jobs require caller authentication and a root-owned /32 target matrix."
+BLOCK_START = "# Cancellable jobs are restricted by a root-owned /32 target matrix."
 INSERT_BEFORE = '@app.route("/api/tools/httpx", methods=["POST"])'
 
 ENDPOINT = r'''
