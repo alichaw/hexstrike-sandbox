@@ -23,6 +23,7 @@ HEX_URL="${HEX_URL:-http://127.0.0.1:8888}"
 TARGET_NAME="${TARGET_NAME:-juiceshop}"
 SERVER_LOG="${SERVER_LOG:-$PROJECT_DIR/server.out}"
 JOB_TARGETS_FILE="${JOB_TARGETS_FILE:-/etc/hexstrike/job-targets.json}"
+NUCLEI_HOME="${NUCLEI_HOME:-/var/lib/hexstrike}"
 
 # sudo aware: these scripts already call `sudo docker`; when we're root that's a no-op
 step() { echo; echo "==================== $* ===================="; }
@@ -53,6 +54,16 @@ step "4/7  apply constrained cancellable-job API"
 python3 "$SANDBOX_DIR/patches/apply_cancellable_jobs.py" \
   "$PROJECT_DIR/hexstrike_server.py" || die "cancellable job API patch"
 
+step "5/7  prepare persistent Nuclei state"
+install -d -o "$HEX_USER" -g "$HEX_USER" -m 0750 "$NUCLEI_HOME"
+if ! find "$NUCLEI_HOME/nuclei-templates" -type f -name '*.yaml' -print -quit 2>/dev/null | grep -q .; then
+  command -v nuclei >/dev/null || die "nuclei binary not found"
+  env HOME="$NUCLEI_HOME" nuclei -update-templates || die "Nuclei template installation"
+  chown -R "$HEX_USER:$HEX_USER" "$NUCLEI_HOME"
+fi
+sudo -u "$HEX_USER" env HOME="$NUCLEI_HOME" nuclei -tl -duc >/dev/null 2>&1 || \
+  die "hexstrike user cannot load installed Nuclei templates"
+
 step "5/7  apply egress firewall (uid $HEX_USER)"
 bash firewall_up.sh || die "firewall_up.sh"
 
@@ -60,8 +71,8 @@ bash firewall_up.sh || die "firewall_up.sh"
 step "6/7  start HexStrike server as '$HEX_USER'"
 # kill any server already listening on 8888 (from a previous run)
 pkill -f "hexstrike_server.py" 2>/dev/null && sleep 2 || true
-# HOME=/tmp so libs that write ~/.cache don't crash (hexstrike has no home dir)
-sudo -u "$HEX_USER" env HOME=/tmp bash -c \
+# Persistent, restricted HOME lets Nuclei read its preinstalled signed templates.
+sudo -u "$HEX_USER" env HOME="$NUCLEI_HOME" bash -c \
   "cd '$PROJECT_DIR' && source '$VENV/bin/activate' && nohup python3 hexstrike_server.py > '$SERVER_LOG' 2>&1 &"
 
 echo "   waiting for server to answer on $HEX_URL/health ..."
