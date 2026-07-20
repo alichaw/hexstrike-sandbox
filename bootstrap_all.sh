@@ -76,10 +76,10 @@ done
 
 job_http=$(curl -s -o /tmp/hexstrike-job-smoke.json -w "%{http_code}" -X POST \
   "$HEX_URL/api/jobs/nmap" -H "Content-Type: application/json" -d '{}')
-[ "$job_http" = "403" ] || die "cancellable job API smoke test returned HTTP $job_http"
+[ "$job_http" = "401" ] || die "cancellable job API smoke test returned HTTP $job_http"
 grep -q '"error"' /tmp/hexstrike-job-smoke.json || die "job API did not fail closed"
 rm -f /tmp/hexstrike-job-smoke.json
-echo "   cancellable job API: fail-closed smoke test passed"
+echo "   cancellable job API: unauthenticated creation rejected"
 
 # confirm it's really running as the restricted user
 whoami_srv=$(ps -o user= -C python3 | tr -d ' ' | head -1)
