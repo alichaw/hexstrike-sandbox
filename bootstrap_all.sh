@@ -59,9 +59,16 @@ install -d -o "$HEX_USER" -g "$HEX_USER" -m 0750 "$NUCLEI_HOME"
 if ! find "$NUCLEI_HOME/nuclei-templates" -type f -name '*.yaml' -print -quit 2>/dev/null | grep -q .; then
   command -v nuclei >/dev/null || die "nuclei binary not found"
   env HOME="$NUCLEI_HOME" nuclei -update-templates || die "Nuclei template installation"
-  chown -R "$HEX_USER:$HEX_USER" "$NUCLEI_HOME"
 fi
-sudo -u "$HEX_USER" env HOME="$NUCLEI_HOME" nuclei -tl -duc >/dev/null 2>&1 || \
+install -d -o "$HEX_USER" -g "$HEX_USER" -m 0750 \
+  "$NUCLEI_HOME/.config" "$NUCLEI_HOME/.cache" "$NUCLEI_HOME/.pdcp"
+chown -R "$HEX_USER:$HEX_USER" \
+  "$NUCLEI_HOME/.config" "$NUCLEI_HOME/.cache" "$NUCLEI_HOME/.pdcp"
+chown -R root:"$HEX_USER" "$NUCLEI_HOME/nuclei-templates"
+find "$NUCLEI_HOME/nuclei-templates" -type d -exec chmod 0750 {} +
+find "$NUCLEI_HOME/nuclei-templates" -type f -exec chmod 0640 {} +
+sudo -u "$HEX_USER" env HOME="$NUCLEI_HOME" nuclei -tl -duc \
+  -templates "$NUCLEI_HOME/nuclei-templates" >/dev/null 2>&1 || \
   die "hexstrike user cannot load installed Nuclei templates"
 
 step "5/7  apply egress firewall (uid $HEX_USER)"
