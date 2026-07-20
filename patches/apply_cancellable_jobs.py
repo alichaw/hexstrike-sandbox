@@ -7,11 +7,14 @@ import shutil
 import sys
 from pathlib import Path
 
-ROUTE_MARKER = '@app.route("/api/jobs/nmap", methods=["POST"])'
+PATCH_MARKER = "# Cancellable jobs v2"
+BLOCK_START = "# Cancellable jobs v2
+# Jobs require caller authentication and a root-owned /32 target matrix."
 INSERT_BEFORE = '@app.route("/api/tools/httpx", methods=["POST"])'
 
 ENDPOINT = r'''
 # Cancellable jobs are restricted by a root-owned /32 target matrix.
+import hashlib as _hex_hashlib
 import ipaddress as _hex_ipaddress
 import json as _hex_json
 import os as _hex_os
@@ -29,12 +32,30 @@ _hex_jobs = {}
 _hex_jobs_lock = _hex_threading.Lock()
 
 
+def _hex_job_config():
+    info = _HEX_JOB_TARGETS.stat()
+    if info.st_uid != 0 or _hex_stat.S_IMODE(info.st_mode) != 0o640:
+        raise ValueError("target matrix must be root-owned mode 0640")
+    document = _hex_json.loads(_HEX_JOB_TARGETS.read_text(encoding="utf-8"))
+    expected = str(document.get("create_token_sha256", ""))
+    if not _hex_re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise ValueError("invalid create token hash")
+    return document
+
+
+def _hex_create_authorized():
+    try:
+        expected = _hex_job_config()["create_token_sha256"]
+    except (OSError, TypeError, ValueError, _hex_json.JSONDecodeError):
+        return False
+    supplied = request.headers.get("X-Job-Create-Token", "")
+    actual = _hex_hashlib.sha256(supplied.encode()).hexdigest()
+    return bool(supplied) and _hex_secrets.compare_digest(actual, expected)
+
+
 def _hex_target_allowed(target):
     try:
-        info = _HEX_JOB_TARGETS.stat()
-        if info.st_uid != 0 or _hex_stat.S_IMODE(info.st_mode) != 0o640:
-            return False, "target matrix must be root-owned mode 0640"
-        document = _hex_json.loads(_HEX_JOB_TARGETS.read_text(encoding="utf-8"))
+        document = _hex_job_config()
         entries = document.get("allowed_targets", [])
         networks = [_hex_ipaddress.ip_network(item, strict=True) for item in entries]
         if not networks or any(network.prefixlen != 32 for network in networks):
@@ -87,6 +108,9 @@ def _hex_wait_job(job):
 @app.route("/api/jobs/nmap", methods=["POST"])
 def create_nmap_job():
     """Start one allowlisted nmap process without shell interpretation."""
+    if not _hex_create_authorized():
+        return jsonify({"error": "job creation unauthorized"}), 401
+
     params = request.get_json(silent=True) or {}
     if not isinstance(params, dict):
         return jsonify({"error": "JSON object required"}), 400
@@ -181,8 +205,8 @@ def main() -> int:
         return 2
     server_path = Path(sys.argv[1])
     text = server_path.read_text(encoding="utf-8")
-    if ROUTE_MARKER in text:
-        print("cancellable job API already present")
+    if PATCH_MARKER in text:
+        print("cancellable job API v2 already present")
         return 0
     if INSERT_BEFORE not in text:
         print(f"insertion marker not found in {server_path}", file=sys.stderr)
@@ -190,8 +214,16 @@ def main() -> int:
     backup = server_path.with_suffix(server_path.suffix + ".pre-cancellable-jobs")
     if not backup.exists():
         shutil.copy2(server_path, backup)
-    server_path.write_text(text.replace(INSERT_BEFORE, ENDPOINT + INSERT_BEFORE, 1), encoding="utf-8")
-    print(f"added target-scoped cancellable nmap API to {server_path}")
+    if BLOCK_START in text:
+        start = text.index(BLOCK_START)
+        end = text.index(INSERT_BEFORE, start)
+        updated = text[:start] + ENDPOINT + text[end:]
+        action = "upgraded"
+    else:
+        updated = text.replace(INSERT_BEFORE, ENDPOINT + INSERT_BEFORE, 1)
+        action = "added"
+    server_path.write_text(updated, encoding="utf-8")
+    print(f"{action} authenticated cancellable nmap API in {server_path}")
     return 0
 
 
