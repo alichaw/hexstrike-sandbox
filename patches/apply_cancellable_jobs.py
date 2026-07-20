@@ -7,8 +7,9 @@ import shutil
 import sys
 from pathlib import Path
 
-PATCH_MARKER = "# Cancellable jobs v4"
+PATCH_MARKER = "# Cancellable jobs v5"
 BLOCK_STARTS = (
+    "# Cancellable jobs v4",
     "# Cancellable jobs v3",
     "# Cancellable jobs v2",
     "# Cancellable jobs are restricted by a root-owned /32 target matrix.",
@@ -16,7 +17,8 @@ BLOCK_STARTS = (
 INSERT_BEFORE = '@app.route("/api/tools/httpx", methods=["POST"])'
 
 ENDPOINT = r'''
-# Cancellable jobs are restricted by a root-owned /32 target matrix.
+# Cancellable jobs v5
+# Jobs are restricted by a root-owned IPv4 /32 target matrix.
 import hashlib as _hex_hashlib
 import ipaddress as _hex_ipaddress
 import json as _hex_json
@@ -97,7 +99,27 @@ def _hex_validate_url(value):
 
 
 def _hex_start_job(command):
-    return _hex_start_job(command)
+    job_id = _hex_secrets.token_urlsafe(24)
+    token = _hex_secrets.token_urlsafe(32)
+    process = _hex_subprocess.Popen(
+        command,
+        stdout=_hex_subprocess.PIPE,
+        stderr=_hex_subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    job = {
+        "job_id": job_id,
+        "token": token,
+        "status": "running",
+        "created_at": _hex_time.time(),
+        "process": process,
+        "cancel_requested": False,
+    }
+    with _hex_jobs_lock:
+        _hex_jobs[job_id] = job
+    _hex_threading.Thread(target=_hex_wait_job, args=(job,), daemon=True).start()
+    return jsonify({"job_id": job_id, "job_token": token, "status": "running"}), 202
 
 
 def _hex_job_view(job):
@@ -177,27 +199,7 @@ def create_nmap_job():
         command.extend(["-p", ports])
     command.append(target)
 
-    job_id = _hex_secrets.token_urlsafe(24)
-    token = _hex_secrets.token_urlsafe(32)
-    process = _hex_subprocess.Popen(
-        command,
-        stdout=_hex_subprocess.PIPE,
-        stderr=_hex_subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
-    job = {
-        "job_id": job_id,
-        "token": token,
-        "status": "running",
-        "created_at": _hex_time.time(),
-        "process": process,
-        "cancel_requested": False,
-    }
-    with _hex_jobs_lock:
-        _hex_jobs[job_id] = job
-    _hex_threading.Thread(target=_hex_wait_job, args=(job,), daemon=True).start()
-    return jsonify({"job_id": job_id, "job_token": token, "status": "running"}), 202
+    return _hex_start_job(command)
 
 
 @app.route("/api/jobs/httpx", methods=["POST"])
@@ -332,7 +334,7 @@ def main() -> int:
     server_path = Path(sys.argv[1])
     text = server_path.read_text(encoding="utf-8")
     if PATCH_MARKER in text:
-        print("cancellable job API v2 already present")
+        print("cancellable job API v5 already present")
         return 0
     if INSERT_BEFORE not in text:
         print(f"insertion marker not found in {server_path}", file=sys.stderr)
