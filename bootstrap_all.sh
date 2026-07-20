@@ -15,7 +15,7 @@
 set -uo pipefail
 
 # ---- config (override via env if your paths differ) ----
-SANDBOX_DIR="${SANDBOX_DIR:-$HOME/hexstrike-ai/sandbox}"
+SANDBOX_DIR="${SANDBOX_DIR:-$(eval echo ~${SUDO_USER:-$USER})/hexstrike-ai/sandbox}"
 PROJECT_DIR="${PROJECT_DIR:-/home/kali/hexstrike-ai}"
 VENV="${VENV:-$PROJECT_DIR/hexstrike-env}"
 HEX_USER="${HEX_USER:-hexstrike}"
