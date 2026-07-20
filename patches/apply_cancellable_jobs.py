@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotently add a target-scoped, cancellable nmap job API."""
+"""Idempotently add target-scoped, cancellable tool job APIs."""
 
 from __future__ import annotations
 
