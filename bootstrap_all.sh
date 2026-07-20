@@ -24,6 +24,7 @@ TARGET_NAME="${TARGET_NAME:-juiceshop}"
 SERVER_LOG="${SERVER_LOG:-$PROJECT_DIR/server.out}"
 JOB_TARGETS_FILE="${JOB_TARGETS_FILE:-/etc/hexstrike/job-targets.json}"
 NUCLEI_HOME="${NUCLEI_HOME:-/var/lib/hexstrike}"
+NUCLEI_TEMPLATES_DIR="${NUCLEI_TEMPLATES_DIR:-$NUCLEI_HOME/.local/nuclei-templates}"
 
 # sudo aware: these scripts already call `sudo docker`; when we're root that's a no-op
 step() { echo; echo "==================== $* ===================="; }
@@ -56,19 +57,23 @@ python3 "$SANDBOX_DIR/patches/apply_cancellable_jobs.py" \
 
 step "5/7  prepare persistent Nuclei state"
 install -d -o "$HEX_USER" -g "$HEX_USER" -m 0750 "$NUCLEI_HOME"
-if ! find "$NUCLEI_HOME/nuclei-templates" -type f -name '*.yaml' -print -quit 2>/dev/null | grep -q .; then
+if ! find "$NUCLEI_TEMPLATES_DIR" -type f -name '*.yaml' -print -quit 2>/dev/null | grep -q .; then
   command -v nuclei >/dev/null || die "nuclei binary not found"
   env HOME="$NUCLEI_HOME" nuclei -update-templates || die "Nuclei template installation"
 fi
 install -d -o "$HEX_USER" -g "$HEX_USER" -m 0750 \
   "$NUCLEI_HOME/.config" "$NUCLEI_HOME/.cache" "$NUCLEI_HOME/.pdcp"
 chown -R "$HEX_USER:$HEX_USER" \
-  "$NUCLEI_HOME/.config" "$NUCLEI_HOME/.cache" "$NUCLEI_HOME/.pdcp"
-chown -R root:"$HEX_USER" "$NUCLEI_HOME/nuclei-templates"
-find "$NUCLEI_HOME/nuclei-templates" -type d -exec chmod 0750 {} +
-find "$NUCLEI_HOME/nuclei-templates" -type f -exec chmod 0640 {} +
+  "$NUCLEI_HOME/.config" "$NUCLEI_HOME/.cache" "$NUCLEI_HOME/.pdcp" || \
+  die "Nuclei writable state ownership"
+chown -R root:"$HEX_USER" "$NUCLEI_TEMPLATES_DIR" || \
+  die "Nuclei template ownership"
+find "$NUCLEI_TEMPLATES_DIR" -type d -exec chmod 0750 {} + || \
+  die "Nuclei template directory permissions"
+find "$NUCLEI_TEMPLATES_DIR" -type f -exec chmod 0640 {} + || \
+  die "Nuclei template file permissions"
 sudo -u "$HEX_USER" env HOME="$NUCLEI_HOME" nuclei -tl -duc \
-  -templates "$NUCLEI_HOME/nuclei-templates" >/dev/null 2>&1 || \
+  -templates "$NUCLEI_TEMPLATES_DIR" >/dev/null 2>&1 || \
   die "hexstrike user cannot load installed Nuclei templates"
 
 step "5/7  apply egress firewall (uid $HEX_USER)"
