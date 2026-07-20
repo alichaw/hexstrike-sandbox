@@ -7,8 +7,9 @@ import shutil
 import sys
 from pathlib import Path
 
-PATCH_MARKER = "# Cancellable jobs v6"
+PATCH_MARKER = "# Cancellable jobs v7"
 BLOCK_STARTS = (
+    "# Cancellable jobs v6",
     "# Cancellable jobs v5",
     "# Cancellable jobs v4",
     "# Cancellable jobs v3",
@@ -18,7 +19,7 @@ BLOCK_STARTS = (
 INSERT_BEFORE = '@app.route("/api/tools/httpx", methods=["POST"])'
 
 ENDPOINT = r'''
-# Cancellable jobs v6
+# Cancellable jobs v7
 # Jobs are restricted by a root-owned IPv4 /32 target matrix.
 import hashlib as _hex_hashlib
 import ipaddress as _hex_ipaddress
@@ -336,6 +337,9 @@ def create_nuclei_job():
         "-severity", severity,
         "-tags", tags,
         "-exclude-tags", "intrusive,fuzz,dos,headless",
+        "-type", "http",
+        "-disable-unsigned-templates",
+        "-disable-update-check",
         "-rate-limit", str(rate_limit),
         "-concurrency", str(concurrency),
         "-bulk-size", "1",
