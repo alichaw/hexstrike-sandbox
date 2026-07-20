@@ -7,8 +7,9 @@ import shutil
 import sys
 from pathlib import Path
 
-PATCH_MARKER = "# Cancellable jobs v9"
+PATCH_MARKER = "# Cancellable jobs v10"
 BLOCK_STARTS = (
+    "# Cancellable jobs v9",
     "# Cancellable jobs v8",
     "# Cancellable jobs v7",
     "# Cancellable jobs v6",
@@ -21,7 +22,7 @@ BLOCK_STARTS = (
 INSERT_BEFORE = '@app.route("/api/tools/httpx", methods=["POST"])'
 
 ENDPOINT = r'''
-# Cancellable jobs v9
+# Cancellable jobs v10
 # Jobs are restricted by a root-owned IPv4 /32 target matrix.
 import hashlib as _hex_hashlib
 import ipaddress as _hex_ipaddress
@@ -38,7 +39,11 @@ from pathlib import Path as _HexPath
 from urllib.parse import urlsplit as _hex_urlsplit
 
 _HEX_JOB_TARGETS = _HexPath("/etc/hexstrike/job-targets.json")
-_HEX_NUCLEI_TEMPLATES = "/var/lib/hexstrike/.local/nuclei-templates"
+_HEX_NUCLEI_TEMPLATES = _HexPath("/var/lib/hexstrike/.local/nuclei-templates")
+_HEX_NUCLEI_BASELINE_WEB_V1 = (
+    "http/technologies/tech-detect.yaml",
+    "http/misconfiguration/http-missing-security-headers.yaml",
+)
 _hex_jobs = {}
 _hex_jobs_lock = _hex_threading.Lock()
 
@@ -308,7 +313,7 @@ def create_nuclei_job():
         return jsonify({"error": "tool not enabled"}), 403
 
     params = request.get_json(silent=True) or {}
-    allowed = {"target", "severity", "tags", "rate_limit", "concurrency", "timeout"}
+    allowed = {"target", "template_set", "rate_limit", "concurrency", "timeout"}
     if not isinstance(params, dict):
         return jsonify({"error": "JSON object required"}), 400
     unknown = sorted(set(params) - allowed)
@@ -319,12 +324,25 @@ def create_nuclei_job():
     if target is None:
         return jsonify({"error": error}), 403
 
-    severity = str(params.get("severity", "info,low,medium")).strip()
-    tags = str(params.get("tags", "tech,misconfig,exposure")).strip()
-    if severity != "info,low,medium":
-        return jsonify({"error": "Unsupported severity set"}), 400
-    if tags != "tech,misconfig,exposure":
-        return jsonify({"error": "Unsupported template tags"}), 400
+    template_set = str(params.get("template_set", "baseline-web-v1")).strip()
+    if template_set != "baseline-web-v1":
+        return jsonify({"error": "Unsupported template set"}), 400
+
+    template_paths = []
+    template_root = _HEX_NUCLEI_TEMPLATES.resolve()
+    for relative in _HEX_NUCLEI_BASELINE_WEB_V1:
+        candidate = (template_root / relative).resolve()
+        try:
+            candidate.relative_to(template_root)
+        except ValueError:
+            return jsonify({"error": "invalid managed template path"}), 500
+        try:
+            info = candidate.stat()
+        except OSError:
+            return jsonify({"error": "managed template missing"}), 500
+        if info.st_uid != 0 or _hex_stat.S_IMODE(info.st_mode) != 0o640:
+            return jsonify({"error": "managed template permissions invalid"}), 500
+        template_paths.append(str(candidate))
 
     try:
         rate_limit = int(params.get("rate_limit", 5))
@@ -335,12 +353,10 @@ def create_nuclei_job():
     if not 1 <= rate_limit <= 5 or concurrency != 1 or not 1 <= timeout <= 5:
         return jsonify({"error": "scan limits exceed the bounded profile"}), 400
 
-    command = [
-        "nuclei", "-u", target,
-        "-templates", _HEX_NUCLEI_TEMPLATES,
-        "-severity", severity,
-        "-tags", tags,
-        "-exclude-tags", "intrusive,fuzz,dos,headless",
+    command = ["nuclei", "-u", target]
+    for template_path in template_paths:
+        command.extend(["-templates", template_path])
+    command.extend([
         "-type", "http",
         "-disable-unsigned-templates",
         "-disable-update-check",
@@ -352,7 +368,7 @@ def create_nuclei_job():
         "-max-host-error", "3",
         "-no-interactsh",
         "-silent",
-    ]
+    ])
     return _hex_start_job(command)
 
 
