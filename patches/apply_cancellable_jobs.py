@@ -7,8 +7,9 @@ import shutil
 import sys
 from pathlib import Path
 
-PATCH_MARKER = "# Cancellable jobs v5"
+PATCH_MARKER = "# Cancellable jobs v6"
 BLOCK_STARTS = (
+    "# Cancellable jobs v5",
     "# Cancellable jobs v4",
     "# Cancellable jobs v3",
     "# Cancellable jobs v2",
@@ -17,7 +18,7 @@ BLOCK_STARTS = (
 INSERT_BEFORE = '@app.route("/api/tools/httpx", methods=["POST"])'
 
 ENDPOINT = r'''
-# Cancellable jobs v5
+# Cancellable jobs v6
 # Jobs are restricted by a root-owned IPv4 /32 target matrix.
 import hashlib as _hex_hashlib
 import ipaddress as _hex_ipaddress
@@ -291,6 +292,59 @@ def create_gobuster_job():
     ]
     if exclude_length is not None:
         command.extend(["--exclude-length", str(exclude_length)])
+    return _hex_start_job(command)
+
+
+@app.route("/api/jobs/nuclei", methods=["POST"])
+def create_nuclei_job():
+    """Start one approval-gated, bounded vulnerability scan."""
+    if not _hex_create_authorized():
+        return jsonify({"error": "job creation unauthorized"}), 401
+    if not _hex_tool_allowed("nuclei"):
+        return jsonify({"error": "tool not enabled"}), 403
+
+    params = request.get_json(silent=True) or {}
+    allowed = {"target", "severity", "tags", "rate_limit", "concurrency", "timeout"}
+    if not isinstance(params, dict):
+        return jsonify({"error": "JSON object required"}), 400
+    unknown = sorted(set(params) - allowed)
+    if unknown:
+        return jsonify({"error": f"Unsupported parameters: {', '.join(unknown)}"}), 400
+
+    target, error = _hex_validate_url(str(params.get("target", "")).strip())
+    if target is None:
+        return jsonify({"error": error}), 403
+
+    severity = str(params.get("severity", "info,low,medium")).strip()
+    tags = str(params.get("tags", "tech,misconfig,exposure")).strip()
+    if severity != "info,low,medium":
+        return jsonify({"error": "Unsupported severity set"}), 400
+    if tags != "tech,misconfig,exposure":
+        return jsonify({"error": "Unsupported template tags"}), 400
+
+    try:
+        rate_limit = int(params.get("rate_limit", 5))
+        concurrency = int(params.get("concurrency", 1))
+        timeout = int(params.get("timeout", 5))
+    except (TypeError, ValueError):
+        return jsonify({"error": "numeric limits must be integers"}), 400
+    if not 1 <= rate_limit <= 5 or concurrency != 1 or not 1 <= timeout <= 5:
+        return jsonify({"error": "scan limits exceed the bounded profile"}), 400
+
+    command = [
+        "nuclei", "-u", target,
+        "-severity", severity,
+        "-tags", tags,
+        "-exclude-tags", "intrusive,fuzz,dos,headless",
+        "-rate-limit", str(rate_limit),
+        "-concurrency", str(concurrency),
+        "-bulk-size", "1",
+        "-timeout", str(timeout),
+        "-retries", "0",
+        "-max-host-error", "3",
+        "-no-interactsh",
+        "-silent",
+    ]
     return _hex_start_job(command)
 
 
