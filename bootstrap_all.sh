@@ -77,7 +77,7 @@ sudo -u "$HEX_USER" env HOME="$NUCLEI_HOME" nuclei -tl -duc \
   die "hexstrike user cannot load installed Nuclei templates"
 
 step "5/7  apply egress firewall (uid $HEX_USER)"
-bash firewall_up.sh || die "firewall_up.sh"
+JOB_TARGETS_FILE="$JOB_TARGETS_FILE" bash firewall_up.sh || die "firewall_up.sh"
 
 # ---- 5. start HexStrike server as the restricted user (background) ----
 step "6/7  start HexStrike server as '$HEX_USER'"
