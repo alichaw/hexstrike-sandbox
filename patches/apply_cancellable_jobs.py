@@ -7,8 +7,9 @@ import shutil
 import sys
 from pathlib import Path
 
-PATCH_MARKER = "# Cancellable jobs v11"
+PATCH_MARKER = "# Cancellable jobs v12"
 BLOCK_STARTS = (
+    "# Cancellable jobs v11",
     "# Cancellable jobs v10",
     "# Cancellable jobs v9",
     "# Cancellable jobs v8",
@@ -23,7 +24,7 @@ BLOCK_STARTS = (
 INSERT_BEFORE = '@app.route("/api/tools/httpx", methods=["POST"])'
 
 ENDPOINT = r'''
-# Cancellable jobs v11
+# Cancellable jobs v12
 # Jobs are restricted by a root-owned IPv4 /32 target matrix.
 import hashlib as _hex_hashlib
 import ipaddress as _hex_ipaddress
@@ -369,6 +370,67 @@ def create_nuclei_job():
         "-no-interactsh",
         "-silent",
     ])
+    return _hex_start_job(command)
+
+
+@app.route("/api/jobs/smb-posture", methods=["POST"])
+def create_smb_posture_job():
+    """Run a fixed SMB protocol and signing posture assessment."""
+    if not _hex_create_authorized():
+        return jsonify({"error": "job creation unauthorized"}), 401
+    if not _hex_tool_allowed("smb-posture"):
+        return jsonify({"error": "tool not enabled"}), 403
+    params = request.get_json(silent=True) or {}
+    if not isinstance(params, dict) or set(params) != {"target"}:
+        return jsonify({"error": "only target is accepted"}), 400
+    target = str(params.get("target", "")).strip()
+    allowed, error = _hex_target_allowed(target)
+    if not allowed:
+        return jsonify({"error": error}), 403
+    command = [
+        "nmap", "-Pn", "-n", "-p", "445",
+        "--script", "smb-protocols,smb2-security-mode,smb2-time,smb-os-discovery",
+        target,
+    ]
+    return _hex_start_job(command)
+
+
+@app.route("/api/jobs/smb-anonymous-access", methods=["POST"])
+def create_smb_anonymous_access_job():
+    """Check whether SMB shares can be listed without credentials."""
+    if not _hex_create_authorized():
+        return jsonify({"error": "job creation unauthorized"}), 401
+    if not _hex_tool_allowed("smb-anonymous-access"):
+        return jsonify({"error": "tool not enabled"}), 403
+    params = request.get_json(silent=True) or {}
+    if not isinstance(params, dict) or set(params) != {"target"}:
+        return jsonify({"error": "only target is accepted"}), 400
+    target = str(params.get("target", "")).strip()
+    allowed, error = _hex_target_allowed(target)
+    if not allowed:
+        return jsonify({"error": error}), 403
+    return _hex_start_job(["smbclient", "-N", "-L", f"//{target}"])
+
+
+@app.route("/api/jobs/smb-ms17-010-check", methods=["POST"])
+def create_smb_ms17_010_check_job():
+    """Run the fixed non-exploit MS17-010 detection script."""
+    if not _hex_create_authorized():
+        return jsonify({"error": "job creation unauthorized"}), 401
+    if not _hex_tool_allowed("smb-ms17-010-check"):
+        return jsonify({"error": "tool not enabled"}), 403
+    params = request.get_json(silent=True) or {}
+    if not isinstance(params, dict) or set(params) != {"target"}:
+        return jsonify({"error": "only target is accepted"}), 400
+    target = str(params.get("target", "")).strip()
+    allowed, error = _hex_target_allowed(target)
+    if not allowed:
+        return jsonify({"error": error}), 403
+    command = [
+        "nmap", "-Pn", "-n", "-p", "445",
+        "--script", "smb-vuln-ms17-010",
+        target,
+    ]
     return _hex_start_job(command)
 
 
