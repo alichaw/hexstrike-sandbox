@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # firewall_up.sh — constrain the attack agent's egress by UID.
 #
-# Everything run as user `hexstrike` (the HexStrike server + the nmap/etc. it
-# spawns) may ONLY reach the lab network (labnet). Any other destination is
-# LOGGED then DROPPED. Your own user (kali) and Claude Desktop are untouched.
+# Everything run as user `hexstrike` (the HexStrike server + its tools) may
+# reach only loopback, the isolated lab subnet, and IPv4 /32 entries from the
+# root-owned job Target Matrix. Every other destination is logged then dropped.
 #
 # Idempotent: safe to re-run. WSL clears iptables on restart, so re-run after boot.
 #   sudo bash firewall_up.sh          # apply
@@ -13,6 +13,7 @@ set -uo pipefail
 
 HEX_USER="${HEX_USER:-hexstrike}"
 LAB_SUBNET="${LAB_SUBNET:-172.18.0.0/16}"
+JOB_TARGETS_FILE="${JOB_TARGETS_FILE:-/etc/hexstrike/job-targets.json}"
 CHAIN="HEXSTRIKE_EGRESS"
 LOG_PREFIX="HEXSTRIKE-DROP "
 
@@ -44,14 +45,38 @@ up() {
   [ -n "$uid" ] || { echo "!! user '$HEX_USER' does not exist. Create it first:"; \
                      echo "   sudo useradd -r -s /usr/sbin/nologin $HEX_USER"; exit 1; }
 
+  local matrix_targets
+  matrix_targets=$(python3 - "$JOB_TARGETS_FILE" <<'PY'
+import ipaddress
+import json
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+info = os.stat(path)
+if info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o640:
+    raise SystemExit("Target Matrix must be root-owned mode 0640")
+data = json.load(open(path, encoding="utf-8"))
+for entry in data.get("allowed_targets", []):
+    network = ipaddress.ip_network(entry, strict=True)
+    if network.version != 4 or network.prefixlen != 32:
+        raise SystemExit("firewall Target Matrix accepts IPv4 /32 entries only")
+    print(network)
+PY
+  ) || { echo "!! invalid target matrix: $JOB_TARGETS_FILE"; return 1; }
+
   # rebuild cleanly so re-running never stacks duplicate rules
   down >/dev/null 2>&1 || true
   iptables -N "$CHAIN"
 
   # 1. allow loopback (local IPC, 127.0.0.1:8888, etc.)
   iptables -A "$CHAIN" -o lo -j ACCEPT
-  # 2. allow the lab network only (the target lives here)
+  # 2. allow the isolated lab and each manager-authorised /32 target.
   iptables -A "$CHAIN" -d "$LAB_SUBNET" -j ACCEPT
+  while IFS= read -r target; do
+    [ -n "$target" ] && iptables -A "$CHAIN" -d "$target" -j ACCEPT
+  done <<< "$matrix_targets"
   # 3. everything else: log (rate-limited) then drop
   iptables -A "$CHAIN" -m limit --limit 10/min -j LOG --log-prefix "$LOG_PREFIX" --log-level 4
   iptables -A "$CHAIN" -j DROP
@@ -59,7 +84,7 @@ up() {
   # hook: only traffic owned by uid(hexstrike) enters our chain
   iptables -A OUTPUT -m owner --uid-owner "$uid" -j "$CHAIN"
 
-  echo "applied: user '$HEX_USER' (uid $uid) may reach $LAB_SUBNET + loopback only; else LOG+DROP"
+  echo "applied: user '$HEX_USER' (uid $uid) may reach loopback, $LAB_SUBNET, and Target Matrix /32 entries only; else LOG+DROP"
 }
 
 need_root
