@@ -4,7 +4,10 @@
     "nmap",
     "httpx",
     "gobuster",
-    "nuclei"
+    "nuclei",
+    "smb-posture",
+    "smb-anonymous-access",
+    "smb-ms17-010-check"
   ],
   "allowed_targets": [
     "192.0.2.10/32"
