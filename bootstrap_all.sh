@@ -23,6 +23,7 @@ HEX_URL="${HEX_URL:-http://127.0.0.1:8888}"
 TARGET_NAME="${TARGET_NAME:-juiceshop}"
 SERVER_LOG="${SERVER_LOG:-$PROJECT_DIR/server.out}"
 JOB_TARGETS_FILE="${JOB_TARGETS_FILE:-/etc/hexstrike/job-targets.json}"
+JOB_CREATE_TOKEN_FILE="${JOB_CREATE_TOKEN_FILE:-/etc/hexstrike/job-create.token}"
 
 # sudo aware: these scripts already call `sudo docker`; when we're root that's a no-op
 step() { echo; echo "==================== $* ===================="; }
@@ -50,6 +51,9 @@ step "4/7  apply constrained cancellable-job API"
 [ -r "$JOB_TARGETS_FILE" ] || die "missing target matrix: $JOB_TARGETS_FILE"
 [ "$(stat -c '%u:%a' "$JOB_TARGETS_FILE")" = "0:640" ] || \
   die "target matrix must be root-owned mode 0640: $JOB_TARGETS_FILE"
+[ -s "$JOB_CREATE_TOKEN_FILE" ] || die "missing job create token: $JOB_CREATE_TOKEN_FILE"
+[ "$(stat -c '%u:%a' "$JOB_CREATE_TOKEN_FILE")" = "0:640" ] || \
+  die "job create token must be root-owned mode 0640: $JOB_CREATE_TOKEN_FILE"
 python3 "$SANDBOX_DIR/patches/apply_cancellable_jobs.py" \
   "$PROJECT_DIR/hexstrike_server.py" || die "cancellable job API patch"
 
@@ -62,7 +66,9 @@ step "6/7  start HexStrike server as '$HEX_USER'"
 pkill -f "hexstrike_server.py" 2>/dev/null && sleep 2 || true
 # HOME=/tmp so libs that write ~/.cache don't crash (hexstrike has no home dir)
 sudo -u "$HEX_USER" env HOME=/tmp bash -c \
-  "cd '$PROJECT_DIR' && source '$VENV/bin/activate' && nohup python3 hexstrike_server.py > '$SERVER_LOG' 2>&1 &"
+  "cd '$PROJECT_DIR' && source '$VENV/bin/activate' && \
+   HEXSTRIKE_JOB_CREATE_TOKEN_FILE='$JOB_CREATE_TOKEN_FILE' \
+   nohup python3 hexstrike_server.py > '$SERVER_LOG' 2>&1 &"
 
 echo "   waiting for server to answer on $HEX_URL/health ..."
 up=0
@@ -76,10 +82,10 @@ done
 
 job_http=$(curl -s -o /tmp/hexstrike-job-smoke.json -w "%{http_code}" -X POST \
   "$HEX_URL/api/jobs/nmap" -H "Content-Type: application/json" -d '{}')
-[ "$job_http" = "403" ] || die "cancellable job API smoke test returned HTTP $job_http"
+[ "$job_http" = "401" ] || die "unauthenticated job smoke test returned HTTP $job_http"
 grep -q '"error"' /tmp/hexstrike-job-smoke.json || die "job API did not fail closed"
 rm -f /tmp/hexstrike-job-smoke.json
-echo "   cancellable job API: fail-closed smoke test passed"
+echo "   cancellable job API: authentication fail-closed smoke test passed"
 
 # confirm it's really running as the restricted user
 whoami_srv=$(ps -o user= -C python3 | tr -d ' ' | head -1)

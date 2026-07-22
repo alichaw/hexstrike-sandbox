@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotently add a target-scoped, cancellable nmap job API."""
+"""Idempotently add authenticated, target-scoped cancellable job APIs."""
 
 from __future__ import annotations
 
@@ -7,10 +7,12 @@ import shutil
 import sys
 from pathlib import Path
 
-ROUTE_MARKER = '@app.route("/api/jobs/nmap", methods=["POST"])'
+PATCH_MARKER = "# HEXSTRIKE_CANCELLABLE_JOBS_V2"
+OLD_MARKER = "# Cancellable jobs are restricted by a root-owned /32 target matrix."
 INSERT_BEFORE = '@app.route("/api/tools/httpx", methods=["POST"])'
 
 ENDPOINT = r'''
+# HEXSTRIKE_CANCELLABLE_JOBS_V2
 # Cancellable jobs are restricted by a root-owned /32 target matrix.
 import ipaddress as _hex_ipaddress
 import json as _hex_json
@@ -20,11 +22,16 @@ import secrets as _hex_secrets
 import signal as _hex_signal
 import stat as _hex_stat
 import subprocess as _hex_subprocess
+import socket as _hex_socket
 import threading as _hex_threading
 import time as _hex_time
+import urllib.parse as _hex_urlparse
 from pathlib import Path as _HexPath
 
 _HEX_JOB_TARGETS = _HexPath("/etc/hexstrike/job-targets.json")
+_HEX_JOB_CREATE_TOKEN = _HexPath(
+    _hex_os.environ.get("HEXSTRIKE_JOB_CREATE_TOKEN_FILE", "/etc/hexstrike/job-create.token")
+)
 _hex_jobs = {}
 _hex_jobs_lock = _hex_threading.Lock()
 
@@ -45,6 +52,50 @@ def _hex_target_allowed(target):
         return any(address in network for network in networks), "target not allowed"
     except (OSError, TypeError, ValueError, _hex_json.JSONDecodeError):
         return False, "invalid or unreadable target matrix"
+
+
+def _hex_create_authorized():
+    """Authenticate job creation with a server-side, root-owned capability."""
+    supplied = request.headers.get("X-Job-Create-Token", "")
+    try:
+        info = _HEX_JOB_CREATE_TOKEN.stat()
+        if info.st_uid != 0 or _hex_stat.S_IMODE(info.st_mode) != 0o640:
+            return False
+        expected = _HEX_JOB_CREATE_TOKEN.read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    return bool(supplied and expected and _hex_secrets.compare_digest(supplied, expected))
+
+
+def _hex_authorized_ipv4_url(value):
+    """Resolve a HTTP(S) URL once and pin execution to an allowlisted IPv4."""
+    try:
+        parsed = _hex_urlparse.urlsplit(str(value).strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return None, "HTTP(S) target URL required"
+        if parsed.username or parsed.password or parsed.fragment:
+            return None, "credentials and fragments are not allowed"
+        port = parsed.port
+        addresses = {
+            item[4][0]
+            for item in _hex_socket.getaddrinfo(
+                parsed.hostname, port or (443 if parsed.scheme == "https" else 80),
+                family=_hex_socket.AF_INET, type=_hex_socket.SOCK_STREAM
+            )
+        }
+        if len(addresses) != 1:
+            return None, "target must resolve to exactly one IPv4 address"
+        address = next(iter(addresses))
+        allowed, error = _hex_target_allowed(address)
+        if not allowed:
+            return None, error
+        host = f"{address}:{port}" if port is not None else address
+        pinned = _hex_urlparse.urlunsplit(
+            (parsed.scheme, host, parsed.path or "", parsed.query or "", "")
+        )
+        return pinned, ""
+    except (OSError, TypeError, ValueError):
+        return None, "invalid target URL"
 
 
 def _hex_job_view(job):
@@ -87,6 +138,8 @@ def _hex_wait_job(job):
 @app.route("/api/jobs/nmap", methods=["POST"])
 def create_nmap_job():
     """Start one allowlisted nmap process without shell interpretation."""
+    if not _hex_create_authorized():
+        return jsonify({"error": "job creation unauthorized"}), 401
     params = request.get_json(silent=True) or {}
     if not isinstance(params, dict):
         return jsonify({"error": "JSON object required"}), 400
@@ -142,6 +195,61 @@ def create_nmap_job():
     return jsonify({"job_id": job_id, "job_token": token, "status": "running"}), 202
 
 
+@app.route("/api/jobs/httpx", methods=["POST"])
+def create_httpx_job():
+    """Start one bounded httpx probe pinned to an allowlisted IPv4 target."""
+    if not _hex_create_authorized():
+        return jsonify({"error": "job creation unauthorized"}), 401
+    params = request.get_json(silent=True) or {}
+    if not isinstance(params, dict):
+        return jsonify({"error": "JSON object required"}), 400
+    allowed = {
+        "target", "probe", "tech_detect", "status_code", "content_length",
+        "title", "web_server", "threads",
+    }
+    unknown = sorted(set(params) - allowed)
+    if unknown:
+        return jsonify({"error": f"Unsupported parameters: {', '.join(unknown)}"}), 400
+
+    target, target_error = _hex_authorized_ipv4_url(params.get("target", ""))
+    if target is None:
+        return jsonify({"error": target_error}), 403
+    threads = params.get("threads", 10)
+    if not isinstance(threads, int) or isinstance(threads, bool) or not 1 <= threads <= 20:
+        return jsonify({"error": "threads must be an integer from 1 to 20"}), 400
+
+    command = ["httpx", "-u", target, "-silent", "-threads", str(threads), "-json"]
+    flags = {
+        "probe": "-probe",
+        "tech_detect": "-tech-detect",
+        "status_code": "-status-code",
+        "content_length": "-content-length",
+        "title": "-title",
+        "web_server": "-web-server",
+    }
+    for name, flag in flags.items():
+        value = params.get(name, False)
+        if not isinstance(value, bool):
+            return jsonify({"error": f"{name} must be boolean"}), 400
+        if value:
+            command.append(flag)
+
+    job_id = _hex_secrets.token_urlsafe(24)
+    token = _hex_secrets.token_urlsafe(32)
+    process = _hex_subprocess.Popen(
+        command, stdout=_hex_subprocess.PIPE, stderr=_hex_subprocess.PIPE,
+        text=True, start_new_session=True,
+    )
+    job = {
+        "job_id": job_id, "token": token, "status": "running",
+        "created_at": _hex_time.time(), "process": process, "cancel_requested": False,
+    }
+    with _hex_jobs_lock:
+        _hex_jobs[job_id] = job
+    _hex_threading.Thread(target=_hex_wait_job, args=(job,), daemon=True).start()
+    return jsonify({"job_id": job_id, "job_token": token, "status": "running"}), 202
+
+
 @app.route("/api/jobs/<job_id>", methods=["GET"])
 def get_hex_job(job_id):
     with _hex_jobs_lock:
@@ -181,8 +289,8 @@ def main() -> int:
         return 2
     server_path = Path(sys.argv[1])
     text = server_path.read_text(encoding="utf-8")
-    if ROUTE_MARKER in text:
-        print("cancellable job API already present")
+    if PATCH_MARKER in text:
+        print("authenticated cancellable job API already present")
         return 0
     if INSERT_BEFORE not in text:
         print(f"insertion marker not found in {server_path}", file=sys.stderr)
@@ -190,8 +298,14 @@ def main() -> int:
     backup = server_path.with_suffix(server_path.suffix + ".pre-cancellable-jobs")
     if not backup.exists():
         shutil.copy2(server_path, backup)
-    server_path.write_text(text.replace(INSERT_BEFORE, ENDPOINT + INSERT_BEFORE, 1), encoding="utf-8")
-    print(f"added target-scoped cancellable nmap API to {server_path}")
+    if OLD_MARKER in text:
+        start = text.index(OLD_MARKER)
+        end = text.index(INSERT_BEFORE, start)
+        text = text[:start] + ENDPOINT.lstrip("\n") + text[end:]
+    else:
+        text = text.replace(INSERT_BEFORE, ENDPOINT + INSERT_BEFORE, 1)
+    server_path.write_text(text, encoding="utf-8")
+    print(f"added authenticated target-scoped nmap/httpx job APIs to {server_path}")
     return 0
 
 

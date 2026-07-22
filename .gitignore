@@ -4,3 +4,8 @@ runs/*
 *.log
 server.out
 __pycache__/
+
+*.token
+.secrets/
+runs/
+*:Zone.Identifier
