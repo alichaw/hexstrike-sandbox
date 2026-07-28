@@ -7,8 +7,10 @@ import shutil
 import sys
 from pathlib import Path
 
-PATCH_MARKER = "# Cancellable jobs v12"
+PATCH_MARKER = "# Cancellable jobs v14"
 BLOCK_STARTS = (
+    "# Cancellable jobs v13",
+    "# Cancellable jobs v12",
     "# Cancellable jobs v11",
     "# Cancellable jobs v10",
     "# Cancellable jobs v9",
@@ -24,7 +26,7 @@ BLOCK_STARTS = (
 INSERT_BEFORE = '@app.route("/api/tools/httpx", methods=["POST"])'
 
 ENDPOINT = r'''
-# Cancellable jobs v12
+# Cancellable jobs v14
 # Jobs are restricted by a root-owned IPv4 /32 target matrix.
 import hashlib as _hex_hashlib
 import ipaddress as _hex_ipaddress
@@ -434,6 +436,152 @@ def create_smb_ms17_010_check_job():
     return _hex_start_job(command)
 
 
+@app.route("/api/jobs/rdp-posture", methods=["POST"])
+def create_rdp_posture_job():
+    """Assess exposed RDP security posture: encryption/NLA and a known-CVE
+    detection script (rdp-vuln-ms12-020, i.e. CVE-2012-0002/BlueKeep-class).
+    Read-only NSE scripts -- no exploitation attempted."""
+    if not _hex_create_authorized():
+        return jsonify({"error": "job creation unauthorized"}), 401
+    if not _hex_tool_allowed("rdp-posture"):
+        return jsonify({"error": "tool not enabled"}), 403
+    params = request.get_json(silent=True) or {}
+    if not isinstance(params, dict) or set(params) != {"target"}:
+        return jsonify({"error": "only target is accepted"}), 400
+    target = str(params.get("target", "")).strip()
+    allowed, error = _hex_target_allowed(target)
+    if not allowed:
+        return jsonify({"error": error}), 403
+    command = [
+        "nmap", "-Pn", "-n", "-p", "3389",
+        "--script", "rdp-enum-encryption,rdp-vuln-ms12-020",
+        target,
+    ]
+    return _hex_start_job(command)
+
+
+@app.route("/api/jobs/rpcclient", methods=["POST"])
+def create_rpcclient_job():
+    """Enumerate domain users/groups over a null RPC session with a fixed command set."""
+    if not _hex_create_authorized():
+        return jsonify({"error": "job creation unauthorized"}), 401
+    if not _hex_tool_allowed("rpcclient"):
+        return jsonify({"error": "tool not enabled"}), 403
+
+    params = request.get_json(silent=True) or {}
+    allowed = {"target", "commands"}
+    if not isinstance(params, dict):
+        return jsonify({"error": "JSON object required"}), 400
+    unknown = sorted(set(params) - allowed)
+    if unknown:
+        return jsonify({"error": f"Unsupported parameters: {', '.join(unknown)}"}), 400
+
+    target = str(params.get("target", "")).strip()
+    target_allowed, target_error = _hex_target_allowed(target)
+    if not target_allowed:
+        return jsonify({"error": target_error}), 403
+
+    allowed_commands = {"enumdomusers", "enumdomgroups", "querydominfo", "lsaquery", "enumdomains"}
+    commands = params.get("commands", ["enumdomusers", "enumdomgroups"])
+    if (
+        not isinstance(commands, list)
+        or not commands
+        or not all(isinstance(item, str) for item in commands)
+        or not set(commands) <= allowed_commands
+    ):
+        return jsonify(
+            {"error": "commands must be a non-empty list drawn from " + ", ".join(sorted(allowed_commands))}
+        ), 400
+
+    # null session: empty username, no password prompt
+    command = ["rpcclient", "-U", "", "-N", target, "-c", ";".join(commands)]
+    return _hex_start_job(command)
+
+
+@app.route("/api/jobs/smbmap", methods=["POST"])
+def create_smbmap_job():
+    """Enumerate SMB shares reachable with a null/guest session."""
+    if not _hex_create_authorized():
+        return jsonify({"error": "job creation unauthorized"}), 401
+    if not _hex_tool_allowed("smbmap"):
+        return jsonify({"error": "tool not enabled"}), 403
+    params = request.get_json(silent=True) or {}
+    if not isinstance(params, dict) or set(params) != {"target"}:
+        return jsonify({"error": "only target is accepted"}), 400
+    target = str(params.get("target", "")).strip()
+    allowed, error = _hex_target_allowed(target)
+    if not allowed:
+        return jsonify({"error": error}), 403
+    return _hex_start_job(["smbmap", "-H", target])
+
+
+@app.route("/api/jobs/nbtscan", methods=["POST"])
+def create_nbtscan_job():
+    """NetBIOS name scan of one authorised host."""
+    if not _hex_create_authorized():
+        return jsonify({"error": "job creation unauthorized"}), 401
+    if not _hex_tool_allowed("nbtscan"):
+        return jsonify({"error": "tool not enabled"}), 403
+    params = request.get_json(silent=True) or {}
+    if not isinstance(params, dict) or set(params) != {"target"}:
+        return jsonify({"error": "only target is accepted"}), 400
+    target = str(params.get("target", "")).strip()
+    allowed, error = _hex_target_allowed(target)
+    if not allowed:
+        return jsonify({"error": error}), 403
+    return _hex_start_job(["nbtscan", "-v", target])
+
+
+@app.route("/api/jobs/netexec", methods=["POST"])
+def create_netexec_job():
+    """Assess AD posture over a null/guest SMB session with a fixed check set.
+
+    v1 scope: protocol is fixed to smb and auth is always a null/guest session
+    (no username/password/hash fields). LDAP protocol and --asreproast are
+    deliberately NOT exposed here yet -- that needs its own review (the output
+    is a crackable artifact) rather than riding in on this endpoint.
+    """
+    if not _hex_create_authorized():
+        return jsonify({"error": "job creation unauthorized"}), 401
+    if not _hex_tool_allowed("netexec"):
+        return jsonify({"error": "tool not enabled"}), 403
+
+    params = request.get_json(silent=True) or {}
+    allowed = {"target", "checks"}
+    if not isinstance(params, dict):
+        return jsonify({"error": "JSON object required"}), 400
+    unknown = sorted(set(params) - allowed)
+    if unknown:
+        return jsonify({"error": f"Unsupported parameters: {', '.join(unknown)}"}), 400
+
+    target = str(params.get("target", "")).strip()
+    target_allowed, target_error = _hex_target_allowed(target)
+    if not target_allowed:
+        return jsonify({"error": target_error}), 403
+
+    check_flags = {
+        "shares": "--shares",
+        "pass-policy": "--pass-pol",
+        "local-groups": "--local-groups",
+        "users": "--users",
+    }
+    checks = params.get("checks", ["shares", "pass-policy", "local-groups"])
+    if (
+        not isinstance(checks, list)
+        or not checks
+        or not all(isinstance(item, str) for item in checks)
+        or not set(checks) <= set(check_flags)
+    ):
+        return jsonify(
+            {"error": "checks must be a non-empty list drawn from " + ", ".join(sorted(check_flags))}
+        ), 400
+
+    command = ["nxc", "smb", target, "-u", "", "-p", ""]
+    for check in checks:
+        command.append(check_flags[check])
+    return _hex_start_job(command)
+
+
 @app.route("/api/jobs/<job_id>", methods=["GET"])
 def get_hex_job(job_id):
     with _hex_jobs_lock:
@@ -474,7 +622,7 @@ def main() -> int:
     server_path = Path(sys.argv[1])
     text = server_path.read_text(encoding="utf-8")
     if PATCH_MARKER in text:
-        print("cancellable job API v5 already present")
+        print(f"{PATCH_MARKER.lstrip('# ')} already present")
         return 0
     if INSERT_BEFORE not in text:
         print(f"insertion marker not found in {server_path}", file=sys.stderr)

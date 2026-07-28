@@ -84,8 +84,9 @@ step "6/7  start HexStrike server as '$HEX_USER'"
 # kill any server already listening on 8888 (from a previous run)
 pkill -f "hexstrike_server.py" 2>/dev/null && sleep 2 || true
 # Persistent, restricted HOME lets Nuclei read its preinstalled signed templates.
+SERVER_PID_FILE="$(mktemp)"
 sudo -u "$HEX_USER" env HOME="$NUCLEI_HOME" bash -c \
-  "cd '$PROJECT_DIR' && source '$VENV/bin/activate' && nohup python3 hexstrike_server.py > '$SERVER_LOG' 2>&1 &"
+  "cd '$PROJECT_DIR' && source '$VENV/bin/activate' && nohup python3 hexstrike_server.py > '$SERVER_LOG' 2>&1 & echo \$! > '$SERVER_PID_FILE'"
 
 echo "   waiting for server to answer on $HEX_URL/health ..."
 up=0
@@ -105,8 +106,14 @@ rm -f /tmp/hexstrike-job-smoke.json
 echo "   cancellable job API: unauthenticated creation rejected"
 
 # confirm it's really running as the restricted user
-whoami_srv=$(ps -o user= -C python3 | tr -d ' ' | head -1)
-echo "   server process user: $whoami_srv (expected: $HEX_USER)"
+# (matched by PID, not by process name — "ps -C python3" would happily match
+# any other python3 process on the box and report a false pass)
+server_pid=$(cat "$SERVER_PID_FILE" 2>/dev/null)
+rm -f "$SERVER_PID_FILE"
+whoami_srv=$(ps -o user= -p "$server_pid" 2>/dev/null | tr -d ' ')
+echo "   server process user: ${whoami_srv:-unknown} (expected: $HEX_USER, pid ${server_pid:-?})"
+[ "$whoami_srv" = "$HEX_USER" ] || \
+  die "server is not running as $HEX_USER — the uid egress firewall from step 5 only restricts uid $HEX_USER, so it is NOT applied to this process. Isolation is not actually in effect."
 
 # ---- 6. prove isolation is in effect on the server itself ----
 step "7/7  prove isolation on the live server"

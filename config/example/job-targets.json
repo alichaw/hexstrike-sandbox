@@ -7,7 +7,12 @@
     "nuclei",
     "smb-posture",
     "smb-anonymous-access",
-    "smb-ms17-010-check"
+    "smb-ms17-010-check",
+    "rpcclient",
+    "smbmap",
+    "nbtscan",
+    "netexec",
+    "rdp-posture"
   ],
   "allowed_targets": [
     "192.0.2.10/32"
