@@ -1,5 +1,5 @@
 # Isolation proof — network 'labnet'
-# generated: 2026-07-27T00:48:53Z
+# generated: 2026-07-30T05:57:06Z
 # host: AN990175215
 
 ## A0  network is internal (expect Internal=true)

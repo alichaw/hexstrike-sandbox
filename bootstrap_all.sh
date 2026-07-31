@@ -85,6 +85,9 @@ step "6/7  start HexStrike server as '$HEX_USER'"
 pkill -f "hexstrike_server.py" 2>/dev/null && sleep 2 || true
 # Persistent, restricted HOME lets Nuclei read its preinstalled signed templates.
 SERVER_PID_FILE="$(mktemp)"
+sudo chown "$HEX_USER:$HEX_USER" "$SERVER_PID_FILE"
+sudo chmod 600 "$SERVER_PID_FILE"
+
 sudo -u "$HEX_USER" env HOME="$NUCLEI_HOME" bash -c \
   "cd '$PROJECT_DIR' && source '$VENV/bin/activate' && nohup python3 hexstrike_server.py > '$SERVER_LOG' 2>&1 & echo \$! > '$SERVER_PID_FILE'"
 
