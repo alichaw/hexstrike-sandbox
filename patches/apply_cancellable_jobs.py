@@ -390,8 +390,30 @@ def create_smb_posture_job():
     if not allowed:
         return jsonify({"error": error}), 403
     command = [
-        "nmap", "-Pn", "-n", "-p", "445",
-        "--script", "smb-protocols,smb2-security-mode,smb2-time,smb-os-discovery",
+        "nmap", "-Pn", "-n", "-sT", "-p", "139,445",
+        "--script", "smb-protocols,smb-security-mode,smb2-security-mode,smb-enum-shares",
+        target,
+    ]
+    return _hex_start_job(command)
+
+
+@app.route("/api/jobs/ssh-posture", methods=["POST"])
+def create_ssh_posture_job():
+    """Inspect SSH metadata without credentials, login, or remote commands."""
+    if not _hex_create_authorized():
+        return jsonify({"error": "job creation unauthorized"}), 401
+    if not _hex_tool_allowed("ssh-posture"):
+        return jsonify({"error": "tool not enabled"}), 403
+    params = request.get_json(silent=True) or {}
+    if not isinstance(params, dict) or set(params) != {"target"}:
+        return jsonify({"error": "only target is accepted"}), 400
+    target = str(params.get("target", "")).strip()
+    allowed, error = _hex_target_allowed(target)
+    if not allowed:
+        return jsonify({"error": error}), 403
+    command = [
+        "nmap", "-Pn", "-n", "-sT", "-sV", "-p", "22",
+        "--script", "ssh2-enum-algos,ssh-hostkey",
         target,
     ]
     return _hex_start_job(command)
@@ -438,9 +460,7 @@ def create_smb_ms17_010_check_job():
 
 @app.route("/api/jobs/rdp-posture", methods=["POST"])
 def create_rdp_posture_job():
-    """Assess exposed RDP security posture: encryption/NLA and a known-CVE
-    detection script (rdp-vuln-ms12-020, i.e. CVE-2012-0002/BlueKeep-class).
-    Read-only NSE scripts -- no exploitation attempted."""
+    """Inspect RDP NLA, TLS, security layer, and encryption without login."""
     if not _hex_create_authorized():
         return jsonify({"error": "job creation unauthorized"}), 401
     if not _hex_tool_allowed("rdp-posture"):
@@ -453,8 +473,8 @@ def create_rdp_posture_job():
     if not allowed:
         return jsonify({"error": error}), 403
     command = [
-        "nmap", "-Pn", "-n", "-p", "3389",
-        "--script", "rdp-enum-encryption,rdp-vuln-ms12-020",
+        "nmap", "-Pn", "-n", "-sT", "-p", "3389",
+        "--script", "rdp-enum-encryption,rdp-ntlm-info,ssl-enum-ciphers",
         target,
     ]
     return _hex_start_job(command)

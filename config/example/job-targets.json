@@ -6,6 +6,7 @@
     "gobuster",
     "nuclei",
     "smb-posture",
+    "ssh-posture",
     "smb-anonymous-access",
     "smb-ms17-010-check",
     "rpcclient",
